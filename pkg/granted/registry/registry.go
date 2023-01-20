@@ -161,7 +161,7 @@ func (r Registry) PromptRequiredKeys(passedKeys []string, shouldFailForRequiredK
 		return err
 	}
 
-	for varName, varProperties := range r.TemplateValues {
+	for fieldName, varProperties := range r.TemplateValues {
 		if varProperties.IsRequired {
 
 			var questions []*survey.Question
@@ -177,8 +177,8 @@ func (r Registry) PromptRequiredKeys(passedKeys []string, shouldFailForRequiredK
 			}
 
 			// if the key was passed through cli then skip the prompt
-			if _, ok := requiredKeysThroughFlags[varName]; ok {
-				err := SaveKey(gConf, varName, requiredKeysThroughFlags[varName])
+			if _, ok := requiredKeysThroughFlags[fieldName]; ok {
+				err := SaveKey(gConf, fieldName, requiredKeysThroughFlags[fieldName])
 				if err != nil {
 					return err
 				}
@@ -187,8 +187,8 @@ func (r Registry) PromptRequiredKeys(passedKeys []string, shouldFailForRequiredK
 			}
 
 			// if the key is already configured then skip
-			if gConf.ProfileRegistry.RequiredKeys[varName] != "" {
-				clio.Debugf("%s is already configured so skipping", varName)
+			if gConf.ProfileRegistry.RequiredKeys[fieldName] != "" {
+				clio.Debugf("%s is already configured so skipping", fieldName)
 
 				break
 			}
@@ -199,7 +199,7 @@ func (r Registry) PromptRequiredKeys(passedKeys []string, shouldFailForRequiredK
 			// in it's STDIO expect the JSON output that AWS credential_process expects.
 			// so fail with warning that there are required keys you need to fill by running granted sync.
 			if shouldFailForRequiredKeys {
-				clio.Errorf("Error syncing registry '%s'. You need to enter value for required key: '%s' before you can proceed.", r.Config.Name, varName)
+				clio.Errorf("Error syncing registry '%s'. You need to enter value for required key: '%s' before you can proceed.", r.Config.Name, fieldName)
 				clio.Errorf("run 'granted registry sync' to enter value for the required key")
 
 				return fmt.Errorf("sync failed")
@@ -210,8 +210,8 @@ func (r Registry) PromptRequiredKeys(passedKeys []string, shouldFailForRequiredK
 			withStdio := survey.WithStdio(os.Stdin, os.Stderr, os.Stderr)
 
 			qs := survey.Question{
-				Name:     varName,
-				Prompt:   &survey.Input{Message: fmt.Sprintf("'%s': %s", varName, prompt)},
+				Name:     fieldName,
+				Prompt:   &survey.Input{Message: fmt.Sprintf("'%s': %s", fieldName, prompt)},
 				Validate: survey.Required}
 
 			questions = append(questions, &qs)
@@ -238,9 +238,9 @@ func (r Registry) PromptRequiredKeys(passedKeys []string, shouldFailForRequiredK
 			if varProperties.Value != nil {
 				if gConf.ProfileRegistry.Variables == nil {
 					gConf.ProfileRegistry.Variables = make(map[string]string)
-					gConf.ProfileRegistry.Variables[varName] = *varProperties.Value
+					gConf.ProfileRegistry.Variables[fieldName] = *varProperties.Value
 				} else {
-					gConf.ProfileRegistry.Variables[varName] = *varProperties.Value
+					gConf.ProfileRegistry.Variables[fieldName] = *varProperties.Value
 				}
 				err := gConf.Save()
 				if err != nil {
