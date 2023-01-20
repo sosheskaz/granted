@@ -15,8 +15,14 @@ import (
 
 type Registry struct {
 	Config         grantedConfig.Registry
-	AwsConfigPaths []string                         `yaml:"awsConfig"`
-	TemplateValues []map[string][]map[string]string `yaml:"templateValues"`
+	AwsConfigPaths []string                 `yaml:"awsConfig"`
+	TemplateValues map[string]TemplateValue `yaml:"templateValues"`
+}
+
+type TemplateValue struct {
+	IsRequired bool    `yaml:"isRequired"`
+	Prompt     string  `yaml:"prompt"`
+	Value      *string `yaml:"value"`
 }
 
 // GetRegistryLocation returns the directory path where cloned repo is located.
@@ -155,106 +161,90 @@ func (r Registry) PromptRequiredKeys(passedKeys []string, shouldFailForRequiredK
 		return err
 	}
 
-	for _, v := range r.TemplateValues {
-		for fieldName, values := range v {
-			if isRequiredKey(values) {
+	for varName, varProperties := range r.TemplateValues {
+		if varProperties.IsRequired {
 
-				var questions []*survey.Question
-				if len(passedKeys) != 0 {
-					for _, val := range passedKeys {
-						key, value, err := formatKey(val)
-						if err != nil {
-							return err
-						}
-
-						requiredKeysThroughFlags[key] = value
-					}
-				}
-
-				// if the key was passed through cli then skip the prompt
-				if _, ok := requiredKeysThroughFlags[fieldName]; ok {
-					err := SaveKey(gConf, fieldName, requiredKeysThroughFlags[fieldName])
+			var questions []*survey.Question
+			if len(passedKeys) != 0 {
+				for _, val := range passedKeys {
+					key, value, err := formatKey(val)
 					if err != nil {
 						return err
 					}
 
-					break
+					requiredKeysThroughFlags[key] = value
+				}
+			}
+
+			// if the key was passed through cli then skip the prompt
+			if _, ok := requiredKeysThroughFlags[varName]; ok {
+				err := SaveKey(gConf, varName, requiredKeysThroughFlags[varName])
+				if err != nil {
+					return err
 				}
 
-				// if the key is already configured then skip
-				if gConf.ProfileRegistry.RequiredKeys[fieldName] != "" {
-					clio.Debugf("%s is already configured so skipping", fieldName)
+				break
+			}
 
-					break
+			// if the key is already configured then skip
+			if gConf.ProfileRegistry.RequiredKeys[varName] != "" {
+				clio.Debugf("%s is already configured so skipping", varName)
+
+				break
+			}
+
+			// if the required key is missing and the command is called through credential process
+			// then instead of asking for prompt we need to fail the process because
+			// credential process might be used with native AWS CLI command which can't have any thing
+			// in it's STDIO expect the JSON output that AWS credential_process expects.
+			// so fail with warning that there are required keys you need to fill by running granted sync.
+			if shouldFailForRequiredKeys {
+				clio.Errorf("Error syncing registry '%s'. You need to enter value for required key: '%s' before you can proceed.", r.Config.Name, varName)
+				clio.Errorf("run 'granted registry sync' to enter value for the required key")
+
+				return fmt.Errorf("sync failed")
+			}
+
+			prompt := varProperties.Prompt
+
+			withStdio := survey.WithStdio(os.Stdin, os.Stderr, os.Stderr)
+
+			qs := survey.Question{
+				Name:     varName,
+				Prompt:   &survey.Input{Message: fmt.Sprintf("'%s': %s", varName, prompt)},
+				Validate: survey.Required}
+
+			questions = append(questions, &qs)
+			ansmap := make(map[string]interface{})
+
+			if len(questions) > 0 {
+				clio.Info("Your Profile Registry requires you to input values for the following keys:")
+
+				err = survey.Ask(questions, &ansmap, withStdio)
+				if err != nil {
+					return err
 				}
 
-				// if the required key is missing and the command is called through credential process
-				// then instead of asking for prompt we need to fail the process because
-				// credential process might be used with native AWS CLI command which can't have any thing
-				// in it's STDIO expect the JSON output that AWS credential_process expects.
-				// so fail with warning that there are required keys you need to fill by running granted sync.
-				if shouldFailForRequiredKeys {
-					clio.Errorf("Error syncing registry '%s'. You need to enter value for required key: '%s' before you can preceed.", r.Config.Name, fieldName)
-					clio.Errorf("run 'granted registry sync' to enter value for the required key")
-
-					return fmt.Errorf("sync failed")
+				err = SaveKeys(gConf, ansmap)
+				if err != nil {
+					return err
 				}
 
-				var prompt string
-				for _, j := range values {
-					for k, v := range j {
-						if k == "prompt" {
-							prompt = v
-						}
-					}
+				break
+			}
+
+		} else {
+			// for all other variables add them to registry as variables
+			if varProperties.Value != nil {
+				if gConf.ProfileRegistry.Variables == nil {
+					gConf.ProfileRegistry.Variables = make(map[string]string)
+					gConf.ProfileRegistry.Variables[varName] = *varProperties.Value
+				} else {
+					gConf.ProfileRegistry.Variables[varName] = *varProperties.Value
 				}
-
-				withStdio := survey.WithStdio(os.Stdin, os.Stderr, os.Stderr)
-
-				qs := survey.Question{
-					Name:     fieldName,
-					Prompt:   &survey.Input{Message: fmt.Sprintf("'%s': %s", fieldName, prompt)},
-					Validate: survey.Required}
-
-				questions = append(questions, &qs)
-				ansmap := make(map[string]interface{})
-
-				if len(questions) > 0 {
-					clio.Info("Your Profile Registry requires you to input values for the following keys:")
-
-					err = survey.Ask(questions, &ansmap, withStdio)
-					if err != nil {
-						return err
-					}
-
-					err = SaveKeys(gConf, ansmap)
-					if err != nil {
-						return err
-					}
-
-					break
-				}
-
-			} else {
-				// for all other variables add them to registry as variables
-				for _, j := range values {
-					for k, v := range j {
-						if k == "value" {
-							if gConf.ProfileRegistry.Variables == nil {
-								gConf.ProfileRegistry.Variables = make(map[string]string)
-								gConf.ProfileRegistry.Variables[fieldName] = v
-							} else {
-								gConf.ProfileRegistry.Variables[fieldName] = v
-							}
-							err := gConf.Save()
-							if err != nil {
-								return err
-							}
-
-							break
-
-						}
-					}
+				err := gConf.Save()
+				if err != nil {
+					return err
 				}
 			}
 		}
@@ -299,17 +289,4 @@ func SaveKey(gConf *grantedConfig.Config, key string, value string) error {
 	}
 
 	return nil
-}
-
-// isRequiredKey has user specific keys that if true
-// will prompt users to enter value for them
-func isRequiredKey(m []map[string]string) bool {
-	for _, fields := range m {
-		for k, v := range fields {
-			if k == "isRequired" && v == "true" {
-				return true
-			}
-		}
-	}
-	return false
 }
